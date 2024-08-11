@@ -1,8 +1,15 @@
-use std::cmp::Ordering;
+use std::{
+    cmp::Ordering,
+    ops::{Deref, DerefMut},
+};
 
 use num::{complex::Complex64, Complex};
 
-use crate::point::Point;
+use crate::{
+    matrix::Matrix,
+    point::Point,
+    utils::{CrossJoin, Duplicate, TupleMapper},
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Iteration {
@@ -297,4 +304,142 @@ impl Default for PositionController {
             max_limit: 1500,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BuildMandelbrotSetOptions {
+    pub viewport_offset_scale: Option<Point<f64>>,
+    pub smooth: Option<Point<u32>>,
+}
+
+impl BuildMandelbrotSetOptions {
+    pub fn viewport_offset_scale(mut self, viewport_offset_scale: Point<f64>) -> Self {
+        self.viewport_offset_scale = Some(viewport_offset_scale);
+        self
+    }
+
+    pub fn smooth(mut self, smooth: Point<u32>) -> Self {
+        self.smooth = Some(smooth);
+        self
+    }
+}
+
+pub trait MandelbrotSet {
+    fn build(self, pos: &Position, options: BuildMandelbrotSetOptions);
+}
+
+pub trait MandelbrotSetImage<T> {
+    fn build_image<F>(self, pos: &Position, convert: F, options: BuildMandelbrotSetOptions)
+    where
+        F: FnMut(Iteration) -> T;
+}
+
+impl<T> MandelbrotSet for T
+where
+    T: MandelbrotSetImage<Iteration>,
+{
+    fn build(self, pos: &Position, options: BuildMandelbrotSetOptions) {
+        self.build_image(pos, |iter| iter, options)
+    }
+}
+
+impl<'a, T, V> MandelbrotSetImage<T> for &'a mut Matrix<T, V>
+where
+    T: Clone,
+    V: Deref<Target = [T]> + DerefMut,
+{
+    fn build_image<F>(self, pos: &Position, convert: F, options: BuildMandelbrotSetOptions)
+    where
+        F: FnMut(Iteration) -> T,
+    {
+        let BuildMandelbrotSetOptions {
+            viewport_offset_scale,
+            smooth,
+        } = options;
+        let (width, height) = self.size();
+        let point_offset = get_point_offset(width, height, viewport_offset_scale, smooth);
+        let transform_index_to_item = create_index_to_item_converter(point_offset, pos, convert);
+        match smooth {
+            Some(smooth) => {
+                let indexes_groups = index_groups(width, height, smooth.x, smooth.y);
+                let item_indexes_pairs = indexes_groups.map_first(transform_index_to_item);
+                for (item, indexes) in item_indexes_pairs {
+                    for (x, y) in indexes {
+                        self.set(x, y, item.clone());
+                    }
+                }
+            }
+            None => {
+                for (item, dest) in self.pairs_mut().map_first(transform_index_to_item) {
+                    *dest = item;
+                }
+            }
+        }
+    }
+}
+
+fn create_index_to_item_converter<'a, T, F>(
+    point_offset: Point<f64>,
+    pos: &'a Position,
+    mut transform_iter_to_item: F,
+) -> impl FnMut((u32, u32)) -> T + 'a
+where
+    F: FnMut(Iteration) -> T + 'a,
+{
+    let mut transform_point_to_item = move |point: Point<f64>| {
+        let point = point + point_offset;
+        let complex = pos.as_complex_with_offset(point);
+        let iter = complex.compute_iterations(pos.limit);
+        let item = transform_iter_to_item(iter);
+        item
+    };
+    let transform_index_to_item = move |index| {
+        let point = Point::from(index).transform(|v| v as f64);
+        let item = transform_point_to_item(point);
+        item
+    };
+    transform_index_to_item
+}
+
+fn get_point_offset(
+    width: u32,
+    height: u32,
+    viewport_offset_scale: Option<Point<f64>>,
+    smooth: Option<Point<u32>>,
+) -> Point<f64> {
+    let viewport_offset = Point::new(width, height).transform(|v| v as f64)
+        * -viewport_offset_scale.unwrap_or(Point::new(0.5, 0.5));
+    let rect_offset = smooth
+        .map(|step| (step / 2).transform(|v| v as f64))
+        .unwrap_or_default();
+    viewport_offset + rect_offset
+}
+
+fn index_groups(
+    width: u32,
+    height: u32,
+    step_x: u32,
+    step_y: u32,
+) -> impl Iterator<Item = ((u32, u32), impl Iterator<Item = (u32, u32)>)> {
+    let indexes = indexes_step_by(width, height, step_x, step_y);
+    let groups = indexes.duplicate().map_second(move |(x, y)| {
+        let rect = (0..step_y).cross_join(0..step_x).flip();
+        let indexes = rect
+            .map(move |(dx, dy)| (x + dx, y + dy))
+            .filter(move |&(x, y)| x < width && y < height);
+        indexes
+    });
+    groups
+}
+
+fn indexes_step_by(
+    width: u32,
+    height: u32,
+    step_x: u32,
+    step_y: u32,
+) -> impl Iterator<Item = (u32, u32)> {
+    (0..height)
+        .step_by(step_y as usize)
+        .cross_join((0..width).step_by(step_x as usize))
+        .flip()
 }

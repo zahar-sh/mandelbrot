@@ -19,6 +19,15 @@ impl<T> Point<T> {
     {
         Self::new(value.clone(), value)
     }
+
+    pub fn transform<R, F>(self, mut f: F) -> Point<R>
+    where
+        F: FnMut(T) -> R,
+    {
+        let x = f(self.x);
+        let y = f(self.y);
+        Point::new(x, y)
+    }
 }
 
 impl<T> From<(T, T)> for Point<T> {
