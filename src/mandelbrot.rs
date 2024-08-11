@@ -218,3 +218,83 @@ impl GetCloser for Point<f64> {
         (Self::new(x, y), reached_x && reached_y)
     }
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PositionController {
+    pub pos: Position,
+    pub step: Point<f64>,
+    pub zoom_scale: f64,
+    pub min_zoom: f64,
+    pub max_zoom: f64,
+    pub limit_scale: f64,
+    pub min_limit: u32,
+    pub max_limit: u32,
+}
+
+impl PositionController {
+    pub fn left(&mut self) {
+        self.pos.left(self.step.x);
+    }
+
+    pub fn right(&mut self) {
+        self.pos.right(self.step.x);
+    }
+
+    pub fn up(&mut self) {
+        self.pos.up(self.step.y);
+    }
+
+    pub fn down(&mut self) {
+        self.pos.down(self.step.y);
+    }
+
+    pub fn translate(&mut self, offset_scale: Point<f64>) {
+        self.pos.translate(offset_scale);
+    }
+
+    pub fn change_zoom(&mut self, zoom_scale: f64) {
+        self.pos.change_zoom(zoom_scale);
+        self.clamp_zoom();
+    }
+
+    pub fn increase_zoom(&mut self) {
+        self.change_zoom(self.zoom_scale);
+    }
+
+    pub fn decrease_zoom(&mut self) {
+        self.change_zoom(-self.zoom_scale);
+    }
+
+    pub fn update_limit(&mut self) {
+        self.pos.update_limit(self.limit_scale);
+        self.clamp_limit();
+    }
+
+    pub fn clamp_zoom(&mut self) {
+        self.pos.clamp_zoom(self.min_zoom, self.max_zoom);
+    }
+
+    pub fn clamp_limit(&mut self) {
+        self.pos.clamp_limit(self.min_limit, self.max_limit);
+    }
+
+    pub fn make_step(&mut self, to: &Position) -> bool {
+        self.pos
+            .make_step(to, self.step, self.zoom_scale, self.limit_scale)
+    }
+}
+
+impl Default for PositionController {
+    fn default() -> Self {
+        Self {
+            pos: Position::new(Point::new(-1.34228, 0.0), 300.0, 200),
+            step: Point::new(10.0, 10.0),
+            zoom_scale: 0.2,
+            min_zoom: 50.0,
+            max_zoom: 4500000000000000.0,
+            limit_scale: 0.25,
+            min_limit: 150,
+            max_limit: 1500,
+        }
+    }
+}
