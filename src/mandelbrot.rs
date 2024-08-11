@@ -155,6 +155,12 @@ impl Position {
     }
 }
 
+impl Default for Position {
+    fn default() -> Self {
+        Positions::Home.pos().clone()
+    }
+}
+
 trait GetCloser<T = Self, S = Self> {
     type Output;
 
@@ -294,7 +300,7 @@ impl PositionController {
 impl Default for PositionController {
     fn default() -> Self {
         Self {
-            pos: Position::new(Point::new(-1.34228, 0.0), 300.0, 200),
+            pos: Position::default(),
             step: Point::new(10.0, 10.0),
             zoom_scale: 0.2,
             min_zoom: 50.0,
@@ -555,3 +561,51 @@ fn indexes_step_by(
 }
 
 pub type IterationMatrix = VecMatrix<Iteration>;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Positions {
+    #[default]
+    Home,
+    Flower,
+    JuliaIsland,
+    Valley,
+    Elephant,
+    Starfish,
+    Sun,
+    Tendris,
+    Tree,
+    Unnamed,
+}
+
+const HOME: Position = Position::new(Point::new(-1.34228, 0.0), 300.0, 200);
+const FLOWER: Position = Position::new(Point::new(-1.9999858812, 0.0), 2000000000000.0, 600);
+const JULIA_ISLAND: Position =
+    Position::new(Point::new(-1.768778828, -0.001738910), 1585714676.0, 1200);
+const VALLEY: Position = Position::new(Point::new(-0.071875677, -0.649981301), 203212.0, 1200);
+const ELEPHANT: Position = Position::new(Point::new(-0.743517833, -0.127094578), 113388.0, 600);
+const STARFISH: Position = Position::new(Point::new(-0.374004139, 0.659792175), 484254.0, 400);
+const SUN: Position = Position::new(Point::new(-0.776592852, -0.13664085), 58282440.0, 600);
+const TENDRIS: Position = Position::new(Point::new(-0.226266647, 1.11617444), 743786806.0, 1200);
+const TREE: Position = Position::new(Point::new(-1.940157342, -0.00000085), 600000000.0, 400);
+const UNNAMED: Position = Position::new(
+    Point::new(-1.88488933694469, 0.00000000081387),
+    1900000000000000.0,
+    1200,
+);
+
+impl Positions {
+    pub fn pos(&self) -> &Position {
+        match self {
+            Positions::Home => &HOME,
+            Positions::Flower => &FLOWER,
+            Positions::JuliaIsland => &JULIA_ISLAND,
+            Positions::Valley => &VALLEY,
+            Positions::Elephant => &ELEPHANT,
+            Positions::Starfish => &STARFISH,
+            Positions::Sun => &SUN,
+            Positions::Tendris => &TENDRIS,
+            Positions::Tree => &TREE,
+            Positions::Unnamed => &UNNAMED,
+        }
+    }
+}
