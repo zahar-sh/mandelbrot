@@ -6,7 +6,7 @@ use std::{
 use num::{complex::Complex64, Complex};
 
 use crate::{
-    matrix::Matrix,
+    matrix::{Matrix, VecMatrix},
     point::Point,
     utils::{pipeline, CrossJoin, Duplicate, PipelineResult, TupleMapper},
 };
@@ -553,3 +553,5 @@ fn indexes_step_by(
         .cross_join((0..width).step_by(step_x as usize))
         .flip()
 }
+
+pub type IterationMatrix = VecMatrix<Iteration>;
