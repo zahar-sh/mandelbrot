@@ -60,7 +60,9 @@ where
 
 impl<T, A, B> TupleMapper<A, B> for T where T: Iterator<Item = (A, B)> + Sized {}
 
-pub type PipelineResult<T> = Result<T, Box<dyn std::any::Any + Send>>;
+pub type PipelineError = Box<dyn std::any::Any + Send>;
+
+pub type PipelineResult<T> = Result<T, PipelineError>;
 
 pub(crate) fn pipeline<T, U, R, I, F, A>(
     items: I,
