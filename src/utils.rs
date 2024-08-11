@@ -59,3 +59,50 @@ where
 }
 
 impl<T, A, B> TupleMapper<A, B> for T where T: Iterator<Item = (A, B)> + Sized {}
+
+pub type PipelineResult<T> = Result<T, Box<dyn std::any::Any + Send>>;
+
+pub(crate) fn pipeline<T, U, R, I, F, A>(
+    items: I,
+    map: F,
+    mut action: A,
+    workers: Option<u32>,
+) -> PipelineResult<R>
+where
+    T: Send,
+    I: Iterator<Item = T> + Send,
+    U: Send,
+    F: FnMut(T) -> U + Send + Clone,
+    A: FnMut(crossbeam::channel::Receiver<U>) -> R,
+{
+    let workers = workers
+        .map(|v| v as usize)
+        .unwrap_or_else(|| num_cpus::get())
+        .saturating_sub(1)
+        .max(1);
+    let channel_cap = workers * 2;
+    let (item_snd, item_recv) = crossbeam::channel::bounded(channel_cap);
+    let (result_snd, result_recv) = crossbeam::channel::bounded(channel_cap);
+    let result = crossbeam::scope(move |s| {
+        s.spawn(move |_| {
+            for item in items {
+                item_snd.send(item).unwrap();
+            }
+        });
+        for _ in 0..workers {
+            let item_recv = item_recv.clone();
+            let result_snd = result_snd.clone();
+            let mut map = map.clone();
+            s.spawn(move |_| {
+                for item in item_recv {
+                    let result = map(item);
+                    result_snd.send(result).unwrap();
+                }
+            });
+        }
+        drop(result_snd);
+        let result = action(result_recv);
+        result
+    });
+    result
+}

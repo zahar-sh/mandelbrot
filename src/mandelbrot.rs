@@ -8,7 +8,7 @@ use num::{complex::Complex64, Complex};
 use crate::{
     matrix::Matrix,
     point::Point,
-    utils::{CrossJoin, Duplicate, TupleMapper},
+    utils::{pipeline, CrossJoin, Duplicate, PipelineResult, TupleMapper},
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -334,6 +334,49 @@ pub trait MandelbrotSetImage<T> {
         F: FnMut(Iteration) -> T;
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParallelBuildMandelbrotSetOptions {
+    pub viewport_offset_scale: Option<Point<f64>>,
+    pub smooth: Option<Point<u32>>,
+    pub workers: Option<u32>,
+}
+
+impl ParallelBuildMandelbrotSetOptions {
+    pub fn viewport_offset_scale(mut self, viewport_offset_scale: Point<f64>) -> Self {
+        self.viewport_offset_scale = Some(viewport_offset_scale);
+        self
+    }
+
+    pub fn smooth(mut self, smooth: Point<u32>) -> Self {
+        self.smooth = Some(smooth);
+        self
+    }
+
+    pub fn workers(mut self, workers: u32) -> Self {
+        self.workers = Some(workers);
+        self
+    }
+}
+
+pub trait ParallelMandelbrotSet {
+    fn par_build(
+        self,
+        pos: &Position,
+        options: ParallelBuildMandelbrotSetOptions,
+    ) -> PipelineResult<()>;
+}
+
+pub trait ParallelMandelbrotSetImage<T> {
+    fn par_build_image<F>(
+        self,
+        pos: &Position,
+        convert: F,
+        options: ParallelBuildMandelbrotSetOptions,
+    ) -> PipelineResult<()>
+    where
+        F: FnMut(Iteration) -> T + Send + Clone;
+}
+
 impl<T> MandelbrotSet for T
 where
     T: MandelbrotSetImage<Iteration>,
@@ -343,12 +386,25 @@ where
     }
 }
 
+impl<T> ParallelMandelbrotSet for T
+where
+    T: ParallelMandelbrotSetImage<Iteration>,
+{
+    fn par_build(
+        self,
+        pos: &Position,
+        options: ParallelBuildMandelbrotSetOptions,
+    ) -> PipelineResult<()> {
+        self.par_build_image(pos, |iter| iter, options)
+    }
+}
+
 impl<'a, T, V> MandelbrotSetImage<T> for &'a mut Matrix<T, V>
 where
     T: Clone,
     V: Deref<Target = [T]> + DerefMut,
 {
-    fn build_image<F>(self, pos: &Position, convert: F, options: BuildMandelbrotSetOptions)
+    fn build_image<F>(self, pos: &Position, mut convert: F, options: BuildMandelbrotSetOptions)
     where
         F: FnMut(Iteration) -> T,
     {
@@ -358,7 +414,18 @@ where
         } = options;
         let (width, height) = self.size();
         let point_offset = get_point_offset(width, height, viewport_offset_scale, smooth);
-        let transform_index_to_item = create_index_to_item_converter(point_offset, pos, convert);
+        let mut transform_point_to_item = move |point| {
+            let point = point + point_offset;
+            let complex = pos.as_complex_with_offset(point);
+            let iter = complex.compute_iterations(pos.limit);
+            let item = convert(iter);
+            item
+        };
+        let transform_index_to_item = move |index| {
+            let point = Point::from(index).transform(|v| v as f64);
+            let item = transform_point_to_item(point);
+            item
+        };
         match smooth {
             Some(smooth) => {
                 let indexes_groups = index_groups(width, height, smooth.x, smooth.y);
@@ -378,27 +445,70 @@ where
     }
 }
 
-fn create_index_to_item_converter<'a, T, F>(
-    point_offset: Point<f64>,
-    pos: &'a Position,
-    mut transform_iter_to_item: F,
-) -> impl FnMut((u32, u32)) -> T + 'a
+impl<'a, T, V> ParallelMandelbrotSetImage<T> for &'a mut Matrix<T, V>
 where
-    F: FnMut(Iteration) -> T + 'a,
+    T: Send + Clone,
+    V: Deref<Target = [T]> + DerefMut,
 {
-    let mut transform_point_to_item = move |point: Point<f64>| {
-        let point = point + point_offset;
-        let complex = pos.as_complex_with_offset(point);
-        let iter = complex.compute_iterations(pos.limit);
-        let item = transform_iter_to_item(iter);
-        item
-    };
-    let transform_index_to_item = move |index| {
-        let point = Point::from(index).transform(|v| v as f64);
-        let item = transform_point_to_item(point);
-        item
-    };
-    transform_index_to_item
+    fn par_build_image<F>(
+        self,
+        pos: &Position,
+        mut convert: F,
+        options: ParallelBuildMandelbrotSetOptions,
+    ) -> PipelineResult<()>
+    where
+        F: FnMut(Iteration) -> T + Send + Clone,
+    {
+        let ParallelBuildMandelbrotSetOptions {
+            viewport_offset_scale,
+            smooth,
+            workers,
+        } = options;
+        let (width, height) = self.size();
+        let point_offset = get_point_offset(width, height, viewport_offset_scale, smooth);
+        let mut transform_point_to_item = move |point| {
+            let point = point + point_offset;
+            let complex = pos.as_complex_with_offset(point);
+            let iter = complex.compute_iterations(pos.limit);
+            let item = convert(iter);
+            item
+        };
+        let mut transform_index_to_item = move |index| {
+            let point = Point::from(index).transform(|v| v as f64);
+            let item = transform_point_to_item(point);
+            item
+        };
+        match smooth {
+            Some(smooth) => pipeline(
+                index_groups(width, height, smooth.x, smooth.y),
+                move |(index, indexes)| {
+                    let item = transform_index_to_item(index);
+                    (item, indexes)
+                },
+                move |recv| {
+                    for (item, indexes) in recv.into_iter() {
+                        for (x, y) in indexes {
+                            self.set(x, y, item.clone());
+                        }
+                    }
+                },
+                workers,
+            ),
+            None => pipeline(
+                self.pairs_mut(),
+                move |(index, dest)| {
+                    let item = transform_index_to_item(index);
+                    (item, dest)
+                },
+                move |recv| {
+                    for (item, dest) in recv.into_iter() {
+                        *dest = item;
+                    }
+                },
+                workers,
+            ),
+        }
+    }
 }
 
 fn get_point_offset(
