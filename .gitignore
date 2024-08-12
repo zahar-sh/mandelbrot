@@ -12,3 +12,4 @@
 *.vsix
 
 /target
+/examples/out
